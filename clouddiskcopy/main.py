@@ -12,8 +12,8 @@ class ResourceCollector:
     def __init__(self):
         self.list = []
 
-    def add(self, type, identifer):
-        self.list.append({'type': type, 'identifer': identifer})
+    def add(self, type, identifier):
+        self.list.append({'type': type, 'identifier': identifier})
 
     def prepare(self, type):
         new = {'type': type}
@@ -25,13 +25,35 @@ class ResourceCollector:
             resource[key] = value
 
 
+async def get_volume_from_kubernetes_disk(kubernetes_pv: str):
+    pv = json.loads(await sh([
+        'kubectl', 'get', 'pv', '-o', 'json', kubernetes_pv
+    ]))
+    spec = pv['spec']
+
+    if 'awsElasticBlockStore' in spec:
+        parts = spec['awsElasticBlockStore']['volumeID'].split('/')
+        pd_name = parts[-1]
+        region = parts[-2]
+        cloud = 'aws'
+
+    if 'gcePersistentDisk' in spec:
+        pd_name = spec['gcePersistentDisk']['pdName']
+        cloud = 'google'
+
+    return Volume(
+        cloud=cloud,
+        identifier=pd_name,
+    )
+
+
 class Cloud():
     def __init__(self, resources):
         self.resources = resources
 
 
 class AWS(Cloud):
-    async def spin_up_for_disk(self, volume):       
+    async def spin_up_for_disk(self, volume, read_only=False):       
         # Create the instance:
         #
         # Which image?
@@ -78,14 +100,17 @@ class AWS(Cloud):
         # aws ec2 detach-volume --volume-id vol-06e4910397b62d79b --region "eu-west-2"
         await sh([
             'aws', 'ec2', 'attach-volume',
-            '--volume-id', volume.id,
+            '--volume-id', volume.identifier,
             '--instance-id', instance_id,
             '--region', volume.region, 
             '--device', '/dev/sdf'
         ])
         
         # Mount the disk
-        # sudo mount /dev/xvdf /mnt/
+        await sh([
+            'ssh', f'ubuntu@{ip}', 
+            '--', 'sudo', 'mount', '/dev/xvdf', '/mnt'
+        ])        
 
     async def terminate_vm(self, vm_id, region):
         await sh([
@@ -100,9 +125,10 @@ class AWS(Cloud):
 
 class GoogleCloud(Cloud):
 
-    async def spin_up_for_disk(self, volume):
+    async def spin_up_for_disk(self, volume, read_only=False):
         # Create an instance
-        vmname = f'syncvm-for-{volume.identifier}'
+        # Name is max 61 characters
+        vmname = f'syncvm-for-{volume.identifier}'[:60]
         await sh([
             'gcloud', 'compute', 'instances', 'create', 
             vmname,
@@ -110,7 +136,17 @@ class GoogleCloud(Cloud):
             '--image-project', 'ubuntu-os-cloud'
         ])
 
-        # Wait - how?
+        # Wait until the instance is running
+        while True:
+            status = await sh([
+                'gcloud',
+                '--format', 'value(status)',
+                'compute', 'instances', 'list',
+                '--filter', f'name={vmname}'
+            ])
+            print(status)
+            if status == 'RUNNING':
+                break
 
         # Get IP
         await sh([
@@ -121,13 +157,20 @@ class GoogleCloud(Cloud):
         ])
 
         # Attach the disk
-        await sh([
+        cmd = [
             'gcloud', 'compute', 'instances', 'attach-disk', vmname, 
-            '--disk', volume.identifer
-        ])
+            '--disk', volume.identifier
+        ]
+        if read_only:
+            cmd.extend(['--mode', 'ro'])
+        await sh(cmd)
 
-        # sudo mount /dev/disk/by-id/google-persistent-disk-1 /mnt
-        # ssh -A ubuntu@35.176.199.160 # 'sudo -E rsync --exclude="/lost+found" -avz michael@35.195.39.175:/mnt/ /mnt'
+        # Mount the disk
+        await sh([
+            'gcloud', 'compute', 'ssh', vmname, 
+            '--ssh-key-file', '/Users/michael/.ssh/id_rsa', 
+            '--', 'sudo', 'mount', '/dev/disk/by-id/google-persistent-disk-1', '/mnt'
+        ])        
 
     async def terminate_vm(self, vm_id):
         await sh([
@@ -140,10 +183,13 @@ class GoogleCloud(Cloud):
 
 
 def get_impl(cloud_id: str, resources: ResourceCollector):
-    klass = {
-        'google': GoogleCloud,
-        'aws': AWS
-    }[cloud_id]
+    try:
+        klass = {
+            'google': GoogleCloud,
+            'aws': AWS
+        }[cloud_id]
+    except KeyError:
+        raise click.UsageError(f'"{cloud_id}" is not a supported cloud provider.')
     return klass(resources)
 
 
@@ -159,6 +205,11 @@ def coro(f):
     return update_wrapper(wrapper, f)
 
 
+def require_value(value: str, error_message: str):
+    if not value:
+        raise click.UsageError(error_message)
+
+
 @click.group()
 @click.option('--debug/--no-debug', default=False)
 def cli(debug):
@@ -166,34 +217,46 @@ def cli(debug):
 
 
 @cli.command('mount-disk')
-@click.option('--cloud', help='Which cloud?', required=True)
-@click.option('--identifier', help='Disk identifier on the cloud', required=True)
+@click.option('--cloud', help='Which cloud?', required=False)
+@click.option('--identifier', help='Disk identifier on the cloud', required=False)
 @click.option('--region', help='Region the disk is in', required=False)
 @click.option('--keypair', help='Keypair to use for the new VM (AWS)', required=False)
+@click.option('--kubernetes-pv', help='Kubernetes Persistent Volume', required=False)
 @coro
-async def mount_disk(cloud, identifier, region=None, keypair=None):
-    """Start a VM and mount a disk.
+async def mount_disk(cloud=None, identifier=None, region=None, keypair=None, kubernetes_pv=None):
+    """Start a VM and mount a disk.    
     """
-    disk = Volume(
-        cloud=cloud,
-        identifer=identifier,
-        region=region,
-        keypair=keypair
-    )
+    if kubernetes_pv:
+        disk = await get_volume_from_kubernetes_disk(kubernetes_pv)
+        if region:
+            disk.region = region
+        if keypair:
+            disk.keypair = keypair
+
+    else:
+        require_value(cloud, "You need so specify a cloud provider, using --cloud")
+        disk = Volume(
+            cloud=cloud,
+            identifier=identifier,
+            region=region,
+            keypair=keypair
+        )
 
     resources = ResourceCollector()
-    await get_impl(disk.cloud, resources).spin_up_for_disk(disk)
-
+    await get_impl(disk.cloud, resources).spin_up_for_disk(disk, read_only=True)
 
 
 def main():
     """
     ./copy --to-cloud aws --to-id 34343 --from-cloud google --from-id 
+
+    # kubectl scale --replicas=0 deployment/brokensword25
+    # ssh -A ubuntu@35.176.199.160 # 'sudo -E rsync --exclude="/lost+found" -avz michael@35.195.39.175:/mnt/ /mnt'
     """
 
     sourcedisk = Volume(
         cloud='google',
-        identifer='gke-production-c46cb51-pvc-9302f1b6-af58-11e6-8e24-42010af00148'
+        identifier='gke-production-c46cb51-pvc-9302f1b6-af58-11e6-8e24-42010af00148'
     )
 
     targetdisk = Volume(
