@@ -33,7 +33,15 @@ Process: Sync one Kubernetes Persistent Volume to another
 	$ ./cli.py mount-disk --kubectl-context=source-cluster --kubernetes-pv $PV
 	$ ./cli.py mount-disk --kubectl-context=target-cluster --kubernetes-pv $PV
 
-9. Scale backup the deployments:
+4. Sync:
+
+    $ ssh-agent
+    $ ssh-add
+    $ ssh -A ubuntu@35.177.57.84  'sudo -E rsync -e "ssh -o StrictHostKeyChecking=no" --exclude="/lost+found" -avz michael@35.195.204.200:/mnt/ /mnt'
+
+5. Terminate the instances:
+
+6. Scale backup the deployments:
 
 	$ kubectl --context source-cluster scale --replicas=1 deployment/foobar
 	$ kubectl --context target scale --replicas=1 deployment/foobar
