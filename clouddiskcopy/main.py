@@ -25,10 +25,12 @@ class ResourceCollector:
             resource[key] = value
 
 
-async def get_volume_from_kubernetes_disk(kubernetes_pv: str):
-    pv = json.loads(await sh([
-        'kubectl', 'get', 'pv', '-o', 'json', kubernetes_pv
-    ]))
+async def get_volume_from_kubernetes_disk(kubernetes_pv: str, context: str = None):
+    cmd = ['kubectl']
+    if context:
+        cmd.extend(['--context', context])
+    cmd.extend(['get', 'pv', '-o', 'json', kubernetes_pv])
+    pv = json.loads(await sh(cmd))
     spec = pv['spec']
 
     if 'awsElasticBlockStore' in spec:
@@ -222,12 +224,14 @@ def cli(debug):
 @click.option('--region', help='Region the disk is in', required=False)
 @click.option('--keypair', help='Keypair to use for the new VM (AWS)', required=False)
 @click.option('--kubernetes-pv', help='Kubernetes Persistent Volume', required=False)
+@click.option('--kubectl-context', help='Use the kubernetes cluster behind this kubectl context.', required=False)
 @coro
-async def mount_disk(cloud=None, identifier=None, region=None, keypair=None, kubernetes_pv=None):
+async def mount_disk(cloud=None, identifier=None, region=None, keypair=None, kubernetes_pv=None,
+    kubectl_context=None):
     """Start a VM and mount a disk.    
     """
     if kubernetes_pv:
-        disk = await get_volume_from_kubernetes_disk(kubernetes_pv)
+        disk = await get_volume_from_kubernetes_disk(kubernetes_pv, context=kubectl_context)
         if region:
             disk.region = region
         if keypair:
