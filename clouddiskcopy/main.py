@@ -130,6 +130,7 @@ class GoogleCloud(Cloud):
     async def spin_up_for_disk(self, volume, read_only=False):
         # Create an instance
         # Name is max 61 characters
+        print("Create a new instance.")
         vmname = f'syncvm-for-{volume.identifier}'[:60]
         await sh([
             'gcloud', 'compute', 'instances', 'create', 
@@ -139,6 +140,8 @@ class GoogleCloud(Cloud):
         ])
 
         # Wait until the instance is running
+        # Is this necessary?
+        print("Wait for instance to start.")
         while True:
             status = await sh([
                 'gcloud',
@@ -146,7 +149,6 @@ class GoogleCloud(Cloud):
                 'compute', 'instances', 'list',
                 '--filter', f'name={vmname}'
             ])
-            print(status)
             if status == 'RUNNING':
                 break
 
@@ -159,6 +161,7 @@ class GoogleCloud(Cloud):
         ])
 
         # Attach the disk
+        print("Attach the disk to the instance.")
         cmd = [
             'gcloud', 'compute', 'instances', 'attach-disk', vmname, 
             '--disk', volume.identifier
@@ -168,6 +171,7 @@ class GoogleCloud(Cloud):
         await sh(cmd)
 
         # Mount the disk
+        print("Mount the volume instead the VM.")
         await sh([
             'gcloud', 'compute', 'ssh', vmname, 
             '--ssh-key-file', '/Users/michael/.ssh/id_rsa', 
