@@ -153,12 +153,25 @@ class GoogleCloud(Cloud):
                 break
 
         # Get IP
-        await sh([
+        ip = await sh([
             'gcloud',
             '--format', 'value(networkInterfaces[0].accessConfigs[0].natIP)',
             'compute', 'instances', 'list',
             '--filter', f'name={vmname}'
         ])
+
+        print("Wait for SSH to become available.")
+        while True:
+            try:
+                status = await sh([
+                    'nc',
+                    '-w', '1',
+                    '-v', ip, '22'
+                ])
+            except ValueError:
+                await asyncio.sleep(3.0)
+            else:
+                break
 
         # Attach the disk
         print("Attach the disk to the instance.")
