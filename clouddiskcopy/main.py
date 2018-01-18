@@ -112,7 +112,9 @@ class AWS(Cloud):
         await sh([
             'ssh', f'ubuntu@{ip}', 
             '--', 'sudo', 'mount', '/dev/xvdf', '/mnt'
-        ])        
+        ])
+
+        return VMInstance(ip=ip, username='ubuntu')   
 
     async def terminate_vm(self, vm_id, region):
         await sh([
@@ -124,20 +126,28 @@ class AWS(Cloud):
         ])
 
 
+def action():
+    pass
+    """
+    if log is not hidden:
+        log immediately
+        ...done
+    """
+
 
 class GoogleCloud(Cloud):
 
     async def spin_up_for_disk(self, volume, read_only=False):
         # Create an instance
         # Name is max 61 characters
-        print("Create a new instance.")
-        vmname = f'syncvm-for-{volume.identifier}'[:60]
-        await sh([
-            'gcloud', 'compute', 'instances', 'create', 
-            vmname,
-            '--image-family', 'ubuntu-1404-lts', 
-            '--image-project', 'ubuntu-os-cloud'
-        ])
+        with action("Create a new instance."):
+            vmname = f'syncvm-for-{volume.identifier}'[:60]
+            await sh([
+                'gcloud', 'compute', 'instances', 'create', 
+                vmname,
+                '--image-family', 'ubuntu-1404-lts', 
+                '--image-project', 'ubuntu-os-cloud'
+            ])
 
         # Wait until the instance is running
         # Is this necessary?
@@ -189,7 +199,10 @@ class GoogleCloud(Cloud):
             'gcloud', 'compute', 'ssh', vmname, 
             '--ssh-key-file', '/Users/michael/.ssh/id_rsa', 
             '--', 'sudo', 'mount', '/dev/disk/by-id/google-persistent-disk-1', '/mnt'
-        ])        
+        ])  
+
+        return VMInstance(ip=ip, username='')
+
 
     async def terminate_vm(self, vm_id):
         await sh([
@@ -214,6 +227,12 @@ def get_impl(cloud_id: str, resources: ResourceCollector):
 
 class Volume(AttrDict):
     pass
+
+
+class VMInstance(AttrDict):
+
+    def ident(self):
+        return f'{self.user}@{self.ip}'
 
 
 def coro(f):
@@ -264,14 +283,13 @@ async def mount_disk(cloud=None, identifier=None, region=None, keypair=None, kub
         )
 
     resources = ResourceCollector()
-    await get_impl(disk.cloud, resources).spin_up_for_disk(disk, read_only=True)
+    vm = await get_impl(disk.cloud, resources).spin_up_for_disk(disk, read_only=True)
+
+    print(vm.ident)
 
 
 def main():
     """
-    ./copy --to-cloud aws --to-id 34343 --from-cloud google --from-id 
-
-    # kubectl scale --replicas=0 deployment/brokensword25
     # ssh -A ubuntu@35.176.199.160 # 'sudo -E rsync --exclude="/lost+found" -avz michael@35.195.39.175:/mnt/ /mnt'
     """
 
