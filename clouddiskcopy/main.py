@@ -1,6 +1,7 @@
 # coding: utf-8
 import asyncio
 import json
+from contextlib import contextmanager
 from functools import update_wrapper
 from .asyncsh import sh
 from attrdict import AttrDict
@@ -126,8 +127,10 @@ class AWS(Cloud):
         ])
 
 
-def action():
-    pass
+@contextmanager
+def action(text):
+    print(text)
+    yield
     """
     if log is not hidden:
         log immediately

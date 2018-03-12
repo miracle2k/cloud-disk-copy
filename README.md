@@ -15,6 +15,11 @@ VERY MUCH A WORK IN PROGRESS.
 
 Alternative: have a service running on both clusters, supporting mounting disk and syncing arbitary sets of disks.
 
+To run on my machine, I currently hae to do:
+
+- pyenv shell 2.7.14 3.6.3
+- python3.6 cli.py
+
 
 Process: Sync one Kubernetes Persistent Volume to another
 =========================================================
