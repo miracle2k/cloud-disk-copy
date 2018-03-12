@@ -300,7 +300,20 @@ async def mount_disk(cloud=None, identifier=None, region=None, keypair=None, kub
     }
     vm = await get_impl(disk.cloud, resources).spin_up_for_disk(disk, read_only=True, **cloud_opts)
 
-    print(vm.ident)
+    print(vm.ident())
+
+
+@cli.command('terminate-vm')
+@click.option('--cloud', help='Which cloud?', required=True)
+@click.option('--vm', help='VM identifier on the cloud', required=True)
+@click.option('--region', help='Region the disk is in', required=False)
+@coro
+async def terminate_vm(cloud, vm, region=None):
+    resources = ResourceCollector()
+
+    cloud_api = get_impl(cloud, resources)
+    await cloud_api.terminate_vm(vm, region=region)
+    print('Terminated %s' % vm)
 
 
 def main():

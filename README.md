@@ -42,9 +42,12 @@ Process: Sync one Kubernetes Persistent Volume to another
 
     $ ssh-agent
     $ ssh-add
-    $ ssh -A ubuntu@35.177.57.84  'sudo -E rsync -e "ssh -o StrictHostKeyChecking=no" --exclude="/lost+found" -avz michael@35.195.204.200:/mnt/ /mnt'
+    $ ssh -A ubuntu@TARGETIP  'sudo -E rsync -e "ssh -o StrictHostKeyChecking=no" --exclude="/lost+found" -avz root@SOURCEIP:/mnt/ /mnt'
 
 5. Terminate the instances:
+
+	$ python3 cli.py terminate-vm --cloud google --vm ....
+	$ python3 cli.py terminate-vm --cloud aws --vm ....
 
 6. Scale backup the deployments:
 
