@@ -1,6 +1,7 @@
 # coding: utf-8
 import asyncio
 import json
+from typing import Dict
 from contextlib import contextmanager
 from functools import update_wrapper
 from .asyncsh import sh
@@ -37,16 +38,18 @@ async def get_volume_from_kubernetes_disk(kubernetes_pv: str, context: str = Non
     if 'awsElasticBlockStore' in spec:
         parts = spec['awsElasticBlockStore']['volumeID'].split('/')
         pd_name = parts[-1]
-        region = parts[-2]
+        region = parts[-2][:-1] # eu-west-2a to eu-west-2
         cloud = 'aws'
 
     if 'gcePersistentDisk' in spec:
         pd_name = spec['gcePersistentDisk']['pdName']
         cloud = 'google'
+        region = None
 
     return Volume(
         cloud=cloud,
         identifier=pd_name,
+        region=region
     )
 
 
@@ -56,7 +59,10 @@ class Cloud():
 
 
 class AWS(Cloud):
-    async def spin_up_for_disk(self, volume, read_only=False):       
+
+    async def spin_up_for_disk(self, volume, read_only=False, keypair=None):       
+        require_value(keypair, "AWS needs a keypair to be specified, you may want to use the name you have for ~/.ssh/id_rsa.pub on AWS")
+
         # Create the instance:
         #
         # Which image?
@@ -71,7 +77,7 @@ class AWS(Cloud):
             '--count', '1',
             '--instance-type', 't2.micro',
             '--region', volume.region, 
-            '--key-name', volume.keypair,
+            '--key-name', keypair,
             '--output', 'json'
         ]))     
         instance_id = instance['Instances'][0]['InstanceId']
@@ -197,7 +203,7 @@ class GoogleCloud(Cloud):
         await sh(cmd)
 
         # Mount the disk
-        print("Mount the volume instead the VM.")
+        print("Mount the volume inside the VM.")
         await sh([
             'gcloud', 'compute', 'ssh', vmname, 
             '--ssh-key-file', '/Users/michael/.ssh/id_rsa', 
@@ -217,7 +223,7 @@ class GoogleCloud(Cloud):
         ])
 
 
-def get_impl(cloud_id: str, resources: ResourceCollector):
+def get_impl(cloud_id: str, resources: ResourceCollector, opts: Dict = None):
     try:
         klass = {
             'google': GoogleCloud,
@@ -225,7 +231,7 @@ def get_impl(cloud_id: str, resources: ResourceCollector):
         }[cloud_id]
     except KeyError:
         raise click.UsageError(f'"{cloud_id}" is not a supported cloud provider.')
-    return klass(resources)
+    return klass(resources, **(opts or {}))
 
 
 class Volume(AttrDict):
@@ -251,6 +257,10 @@ def require_value(value: str, error_message: str):
         raise click.UsageError(error_message)
 
 
+def require_volume_complete(disk: Volume):
+    require_value(disk.region, 'All disks require a region to be specified.')    
+
+
 @click.group()
 @click.option('--debug/--no-debug', default=False)
 def cli(debug):
@@ -273,20 +283,22 @@ async def mount_disk(cloud=None, identifier=None, region=None, keypair=None, kub
         disk = await get_volume_from_kubernetes_disk(kubernetes_pv, context=kubectl_context)
         if region:
             disk.region = region
-        if keypair:
-            disk.keypair = keypair
+        require_volume_complete(disk)
 
     else:
         require_value(cloud, "You need so specify a cloud provider, using --cloud")
         disk = Volume(
             cloud=cloud,
             identifier=identifier,
-            region=region,
-            keypair=keypair
+            region=region
         )
+        require_volume_complete(disk)
 
     resources = ResourceCollector()
-    vm = await get_impl(disk.cloud, resources).spin_up_for_disk(disk, read_only=True)
+    cloud_opts = {
+        'keypair': keypair
+    }
+    vm = await get_impl(disk.cloud, resources).spin_up_for_disk(disk, read_only=True, **cloud_opts)
 
     print(vm.ident)
 
