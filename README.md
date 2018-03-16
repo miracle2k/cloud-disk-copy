@@ -24,6 +24,13 @@ To run on my machine, I currently hae to do:
 Process: Sync one Kubernetes Persistent Volume to another
 =========================================================
 
+Single Command:
+
+$ python3 cli.py sync --kubectl-context-source gce --kubectl-context-target k5 --deployments-source NS/FOO --deployments-target NS/BAR --kubernetes-pv-target pvc-e102b24f-27e3-11e8-909c-069be05e237c --cloud-source google --identifier-source FOO --region-source europe-west1 --keypair-target foobar
+
+
+Individual Steps:
+
 1. Pick your your volume:
 
 	$ kubectl --context source get pv
