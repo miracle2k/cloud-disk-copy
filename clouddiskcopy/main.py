@@ -3,8 +3,10 @@ import asyncio
 import json
 from typing import Dict
 from contextlib import contextmanager
+from collections import defaultdict
 from functools import update_wrapper
 from .asyncsh import sh
+from .utils import composed
 from attrdict import AttrDict
 import click
 
@@ -22,12 +24,15 @@ class ResourceCollector:
         self.list.append(new)
         return new
 
+    def __iter__(self):
+        return iter(self.list)
+
     def complete(self, resource, **data):
         for key, value in data.items():
             resource[key] = value
 
 
-async def get_volume_from_kubernetes_disk(kubernetes_pv: str, context: str = None):
+async def get_volume_from_kubernetes_disk(kubernetes_pv: str, context: str = None, region: str = None):
     cmd = ['kubectl']
     if context:
         cmd.extend(['--context', context])
@@ -38,19 +43,21 @@ async def get_volume_from_kubernetes_disk(kubernetes_pv: str, context: str = Non
     if 'awsElasticBlockStore' in spec:
         parts = spec['awsElasticBlockStore']['volumeID'].split('/')
         pd_name = parts[-1]
-        region = parts[-2][:-1] # eu-west-2a to eu-west-2
+        if not region:
+            region = parts[-2][:-1] # eu-west-2a to eu-west-2
         cloud = 'aws'
 
     if 'gcePersistentDisk' in spec:
         pd_name = spec['gcePersistentDisk']['pdName']
         cloud = 'google'
-        region = None
 
-    return Volume(
+    volume = Volume(
         cloud=cloud,
         identifier=pd_name,
         region=region
     )
+    require_volume_complete(volume)
+    return volume
 
 
 class Cloud():
@@ -60,8 +67,11 @@ class Cloud():
 
 class AWS(Cloud):
 
-    async def spin_up_for_disk(self, volume, read_only=False, keypair=None):       
-        require_value(keypair, "AWS needs a keypair to be specified, you may want to use the name you have for ~/.ssh/id_rsa.pub on AWS")
+    async def spin_up_for_disk(self, volume, read_only=False, opts=None):
+        if not opts:
+            opts = AttrDict()
+
+        require_value(opts.keypair, "AWS needs a keypair to be specified, you may want to use the name you have for ~/.ssh/id_rsa.pub on AWS")
 
         # Create the instance:
         #
@@ -77,13 +87,12 @@ class AWS(Cloud):
             '--count', '1',
             '--instance-type', 't2.micro',
             '--region', volume.region, 
-            '--key-name', keypair,
+            '--key-name', opts.keypair,
             '--output', 'json'
         ]))     
         instance_id = instance['Instances'][0]['InstanceId']
         self.resources.complete(instance_resource, identifier=instance_id)
         
-
         # Wait for the instance to be up.
         await sh([
             'aws',
@@ -146,7 +155,7 @@ def action(text):
 
 class GoogleCloud(Cloud):
 
-    async def spin_up_for_disk(self, volume, read_only=False):
+    async def spin_up_for_disk(self, volume, read_only=False, opts=None):
         # Create an instance
         # Name is max 61 characters
         with action("Create a new instance."):
@@ -223,6 +232,25 @@ class GoogleCloud(Cloud):
         ])
 
 
+async def scale_down_deployment(deployment, context=None):    
+    cmd = ['kubectl']
+    if context:
+        cmd.extend(['--context', context])
+    cmd.extend(['scale', '--replicas=0', '-o=name'])
+
+    parts = deployment.split('/', 1)
+    namespace = None
+    if len(parts) > 1:
+        namespace, deployment_name = parts
+    else:
+        deployment_name = parts[0]
+
+    if namespace:
+        cmd.extend(['--namespace', namespace])
+    cmd.extend(['deployment/%s' % deployment_name])
+    await sh(cmd)
+
+
 def get_impl(cloud_id: str, resources: ResourceCollector, opts: Dict = None):
     try:
         klass = {
@@ -267,24 +295,10 @@ def cli(debug):
     click.echo('Debug mode is %s' % ('on' if debug else 'off'))
 
 
-@cli.command('mount-disk')
-@click.option('--cloud', help='Which cloud?', required=False)
-@click.option('--identifier', help='Disk identifier on the cloud', required=False)
-@click.option('--region', help='Region the disk is in', required=False)
-@click.option('--keypair', help='Keypair to use for the new VM (AWS)', required=False)
-@click.option('--kubernetes-pv', help='Kubernetes Persistent Volume', required=False)
-@click.option('--kubectl-context', help='Use the kubernetes cluster behind this kubectl context.', required=False)
-@coro
-async def mount_disk(cloud=None, identifier=None, region=None, keypair=None, kubernetes_pv=None,
-    kubectl_context=None):
-    """Start a VM and mount a disk.    
-    """
+async def get_disk_from_cli_arguments(kubernetes_pv, cloud, identifier, region, kubectl_context):
     if kubernetes_pv:
-        disk = await get_volume_from_kubernetes_disk(kubernetes_pv, context=kubectl_context)
-        if region:
-            disk.region = region
-        require_volume_complete(disk)
-
+        return await get_volume_from_kubernetes_disk(
+            kubernetes_pv, context=kubectl_context, region=region)
     else:
         require_value(cloud, "You need so specify a cloud provider, using --cloud")
         disk = Volume(
@@ -293,6 +307,28 @@ async def mount_disk(cloud=None, identifier=None, region=None, keypair=None, kub
             region=region
         )
         require_volume_complete(disk)
+    return disk
+
+
+def make_disk_options(suffix=''):
+    return composed(
+        click.option(f'--cloud{suffix}', help='Which cloud?', required=False),
+        click.option(f'--identifier{suffix}', help='Disk identifier on the cloud', required=False),
+        click.option(f'--region{suffix}', help='Region the disk is in', required=False),
+        click.option(f'--keypair{suffix}', help='Keypair to use for the new VM (AWS)', required=False),
+        click.option(f'--kubernetes-pv{suffix}', help='Kubernetes Persistent Volume', required=False),
+        click.option(f'--kubectl-context{suffix}', help='Use the kubernetes cluster behind this kubectl context.', required=False),
+    )
+
+
+@cli.command('mount-disk')
+@make_disk_options()
+@coro
+async def mount_disk(cloud=None, identifier=None, region=None, keypair=None, kubernetes_pv=None,
+    kubectl_context=None):
+    """Start a VM and mount a disk.    
+    """
+    disk = await get_disk_from_cli_arguments(kubernetes_pv, cloud, identifer, region, kubectl_context)
 
     resources = ResourceCollector()
     cloud_opts = {
@@ -316,27 +352,82 @@ async def terminate_vm(cloud, vm, region=None):
     print('Terminated %s' % vm)
 
 
-def main():
+async def sync(source_vm: VMInstance, target_vm: VMInstance):
+    """Do the sync between two VM instances.
     """
-    # ssh -A ubuntu@35.176.199.160 # 'sudo -E rsync --exclude="/lost+found" -avz michael@35.195.39.175:/mnt/ /mnt'
-    """
 
-    sourcedisk = Volume(
-        cloud='google',
-        identifier='gke-production-c46cb51-pvc-9302f1b6-af58-11e6-8e24-42010af00148'
-    )
+    await sh(['ssh-agent'])
+    await sh(['ssh-add'])
+    await sh([
+        'ssh',
+        '-A',
+        'ubuntu@%s' % target_vm.ip,
+        'sudo',
+        '-E',
+        'rsync',
+        '-e',
+        'ssh -o StrictHostKeyChecking=no',
+        '--exclude="/lost+found"',
+        '-avz', 
+        'root@%s:/mnt/' % source_vm.ip,
+        '/mnt'
+    ])
 
-    targetdisk = Volume(
-        cloud='aws',
-        region='eu-west-2',
-        identifier='vol-06e4910397b62d79b',
-        keypair='dolores',
-    )
 
-    resources = ResourceCollector()
+@cli.command('sync')
+@make_disk_options(suffix='-source')
+@make_disk_options(suffix='-target')
+@click.option('--deployments-source', help='Source deployments to scale down', multiple=True)
+@click.option('--deployments-target', help='Target deployments to scale down', multiple=True)
+@coro
+async def main(    
+    deployments_source,
+    kubernetes_pv_source,
+    cloud_source,
+    region_source,
+    keypair_source,
+    identifier_source,
+
+    deployments_target,
+    kubernetes_pv_target,
+    cloud_target,
+    region_target,
+    keypair_target,
+    identifier_target,
+    
+    kubectl_context_source=None,
+    kubectl_context_target=None
+):
+    for deployment in deployments_source:
+        print('Scaling down source deployment', deployment)
+        await scale_down_deployment(deployment, context=kubectl_context_source)
+    for deployment in deployments_target:
+        print('Scaling down target deployment', deployment)
+        await scale_down_deployment(deployment, context=kubectl_context_target)
+
+    resources = defaultdict(lambda: ResourceCollector())
     try:
-        get_impl(sourcedisk.cloud, resources).spin_up_for_disk(sourcedisk)
-        get_impl(targetdisk.cloud, resources).spin_up_for_disk(sourcedisk)
+        disk_source = await get_disk_from_cli_arguments(kubernetes_pv_source, cloud_source, identifier_source, region_source, kubectl_context_source)
+        disk_target = await get_disk_from_cli_arguments(kubernetes_pv_target, cloud_target, identifier_target, region_target, kubectl_context_target)        
+        
+        source_cloud = get_impl(disk_source.cloud, resources[disk_source.cloud])
+        source_cloud_opts = AttrDict({
+            'keypair': keypair_source
+        })
+        vm_source = await source_cloud.spin_up_for_disk(disk_source, read_only=True, opts=source_cloud_opts)
+
+        target_cloud_opts = AttrDict({
+            'keypair': keypair_target
+        })
+        target_cloud = get_impl(disk_target.cloud, resources[disk_source.cloud])
+        vm_target = await target_cloud.spin_up_for_disk(disk_target, read_only=False, opts=target_cloud_opts)
+
+        await sync(vm_source, vm_target)
     finally:
-        if resources:
-            shutdown(resources)
+
+        print('Terminating all resources')
+        for cloud, collector in resources.items():
+            for resource in collector:
+                cloud_api = get_impl(cloud, resources[cloud])
+                await cloud_api.terminate_vm(resource['identifer'], region=resource.get('region'))
+    

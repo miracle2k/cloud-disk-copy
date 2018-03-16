@@ -1,7 +1,7 @@
 import asyncio
 
 
-async def sh(command, verbose=False):
+async def sh(command, verbose=True):
     """Run command in subprocess (shell)
     
     Note:
