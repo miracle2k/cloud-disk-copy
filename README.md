@@ -26,7 +26,11 @@ Process: Sync one Kubernetes Persistent Volume to another
 
 Single Command:
 
-$ python3 cli.py sync --kubectl-context-source gce --kubectl-context-target k5 --deployments-source NS/FOO --deployments-target NS/BAR --kubernetes-pv-target pvc-e102b24f-27e3-11e8-909c-069be05e237c --cloud-source google --identifier-source FOO --region-source europe-west1 --keypair-target foobar
+$ python3 cli.py sync --kubectl-context-source gce --kubectl-context-target k5 --deployments-source NS/FOO --deployments-target NS/BAR --kubernetes-pv-target pvc-e102b24f-27e3-11e8-909c-069be05e237c --cloud-source google --identifier-source FOO --region-source europe-west1 --keypair-target foobar --region-source europe-west1
+
+Or:
+
+$ python3 cli.py sync --kubectl-context-source gce --kubectl-context-target k5 --deployments-source NS/FOO --deployments-target NS/BAR --kubernetes-pv-target pvc-e12899e9-26c0-11e8-909c-069be05e237c --kubernetes-pv-source pvc-77403b9f-d5e1-11e6-b958-42010af000bd --region-source europe-west1 --keypair-target foobar
 
 
 Individual Steps:

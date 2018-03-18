@@ -126,7 +126,7 @@ class AWS(Cloud):
         
         # Mount the disk
         await sh([
-            'ssh', f'ubuntu@{ip}', 
+            'ssh', f'ubuntu@{ip}', '-o', 'StrictHostKeyChecking=no',
             '--', 'sudo', 'mount', '/dev/xvdf', '/mnt'
         ])
 
@@ -286,7 +286,7 @@ def require_value(value: str, error_message: str):
 
 
 def require_volume_complete(disk: Volume):
-    require_value(disk.region, 'All disks require a region to be specified.')    
+    require_value(disk.region, 'All disks require a region to be specified. For Google, this needs to be done manually.')    
 
 
 @click.group()
@@ -360,17 +360,10 @@ async def sync(source_vm: VMInstance, target_vm: VMInstance):
     await sh(['ssh-add'])
     await sh([
         'ssh',
+        '-o', 'StrictHostKeyChecking=no',
         '-A',
         'ubuntu@%s' % target_vm.ip,
-        'sudo',
-        '-E',
-        'rsync',
-        '-e',
-        'ssh -o StrictHostKeyChecking=no',
-        '--exclude="/lost+found"',
-        '-avz', 
-        'root@%s:/mnt/' % source_vm.ip,
-        '/mnt'
+        'sudo -E rsync -e "ssh -o StrictHostKeyChecking=no" --exclude="/lost+found" -avz root@%s:/mnt/ /mnt' %  source_vm.ip,
     ])
 
 
