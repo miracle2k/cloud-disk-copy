@@ -422,5 +422,5 @@ async def main(
         for cloud, collector in resources.items():
             for resource in collector:
                 cloud_api = get_impl(cloud, resources[cloud])
-                await cloud_api.terminate_vm(resource['identifer'], region=resource.get('region'))
+                await cloud_api.terminate_vm(resource['identifier'], region=resource.get('region'))
     
