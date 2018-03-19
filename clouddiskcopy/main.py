@@ -125,6 +125,8 @@ class AWS(Cloud):
         ])
         
         # Mount the disk
+        await asyncio.sleep(10)
+
         await sh([
             'ssh', f'ubuntu@{ip}', '-o', 'StrictHostKeyChecking=no',
             '--', 'sudo', 'mount', '/dev/xvdf', '/mnt'
@@ -145,7 +147,12 @@ class AWS(Cloud):
 @contextmanager
 def action(text):
     print(text)
+    print('----------------------------')
     yield
+    print()
+    print()
+    print()
+    print()
     """
     if log is not hidden:
         log immediately
@@ -167,69 +174,70 @@ class GoogleCloud(Cloud):
                 '--image-project', 'ubuntu-os-cloud'
             ])
 
-        # Wait until the instance is running
-        # Is this necessary?
-        print("Wait for instance to start.")
-        while True:
-            status = await sh([
-                'gcloud',
-                '--format', 'value(status)',
-                'compute', 'instances', 'list',
-                '--filter', f'name={vmname}'
-            ])
-            if status == 'RUNNING':
-                break
+            # Wait until the instance is running
+            # Is this necessary?
+            with action("Wait for instance to start."):
+                while True:
+                    status = await sh([
+                        'gcloud',
+                        '--format', 'value(status)',
+                        'compute', 'instances', 'list',
+                        '--filter', f'name={vmname}'
+                    ])
+                    if status == 'RUNNING':
+                        break
 
-        # Get IP
-        ip = await sh([
-            'gcloud',
-            '--format', 'value(networkInterfaces[0].accessConfigs[0].natIP)',
-            'compute', 'instances', 'list',
-            '--filter', f'name={vmname}'
-        ])
-
-        print("Wait for SSH to become available.")
-        while True:
-            try:
-                status = await sh([
-                    'nc',
-                    '-w', '1',
-                    '-v', ip, '22'
+                # Get IP
+                ip = await sh([
+                    'gcloud',
+                    '--format', 'value(networkInterfaces[0].accessConfigs[0].natIP)',
+                    'compute', 'instances', 'list',
+                    '--filter', f'name={vmname}'
                 ])
-            except ValueError:
-                await asyncio.sleep(3.0)
-            else:
-                break
+
+            with action("Wait for SSH to become available."):
+                while True:
+                    try:
+                        status = await sh([
+                            'nc',
+                            '-w', '1',
+                            '-v', ip, '22'
+                        ])
+                    except ValueError:
+                        await asyncio.sleep(3.0)
+                    else:
+                        break
 
         # Attach the disk
-        print("Attach the disk to the instance.")
-        cmd = [
-            'gcloud', 'compute', 'instances', 'attach-disk', vmname, 
-            '--disk', volume.identifier
-        ]
-        if read_only:
-            cmd.extend(['--mode', 'ro'])
-        await sh(cmd)
+        with action("Attach the disk to the instance."):
+            cmd = [
+                'gcloud', 'compute', 'instances', 'attach-disk', vmname, 
+                '--disk', volume.identifier
+            ]
+            if read_only:
+                cmd.extend(['--mode', 'ro'])
+            await sh(cmd)
 
         # Mount the disk
-        print("Mount the volume inside the VM.")
-        await sh([
-            'gcloud', 'compute', 'ssh', vmname, 
-            '--ssh-key-file', '/Users/michael/.ssh/id_rsa', 
-            '--', 'sudo', 'mount', '/dev/disk/by-id/google-persistent-disk-1', '/mnt'
-        ])  
+        with action("Mount the volume inside the VM."):
+            await sh([
+                'gcloud', 'compute', 'ssh', vmname, 
+                '--ssh-key-file', '/Users/michael/.ssh/id_rsa', 
+                '--', 'sudo', 'mount', '/dev/disk/by-id/google-persistent-disk-1', '/mnt'
+            ])  
 
         return VMInstance(ip=ip, username='')
 
 
-    async def terminate_vm(self, vm_id):
-        await sh([
-            'gcloud', 
-            'compute', 
-            'instances', 
-            'stop', 
-            vm_id
-        ])
+    async def terminate_vm(self, vm_id, region):
+        with action("Terminating %s" % vm_id):
+            await sh([
+                'gcloud', 
+                'compute', 
+                'instances', 
+                'stop', 
+                vm_id
+            ])
 
 
 async def scale_down_deployment(deployment, context=None):    
@@ -364,7 +372,7 @@ async def sync(source_vm: VMInstance, target_vm: VMInstance):
         '-A',
         'ubuntu@%s' % target_vm.ip,
         'sudo -E rsync -e "ssh -o StrictHostKeyChecking=no" --exclude="/lost+found" -avz root@%s:/mnt/ /mnt' %  source_vm.ip,
-    ])
+    ], capture=False)
 
 
 @cli.command('sync')
@@ -391,12 +399,14 @@ async def main(
     kubectl_context_source=None,
     kubectl_context_target=None
 ):
-    for deployment in deployments_source:
-        print('Scaling down source deployment', deployment)
-        await scale_down_deployment(deployment, context=kubectl_context_source)
-    for deployment in deployments_target:
-        print('Scaling down target deployment', deployment)
-        await scale_down_deployment(deployment, context=kubectl_context_target)
+
+    with action('Scaling down deployments'):
+        for deployment in deployments_source:
+            with action('Scaling down source deployment: %s' % deployment):
+                await scale_down_deployment(deployment, context=kubectl_context_source)
+        for deployment in deployments_target:
+            with action('Scaling down target deployment: %s' % deployment):
+                await scale_down_deployment(deployment, context=kubectl_context_target)
 
     resources = defaultdict(lambda: ResourceCollector())
     try:
@@ -412,15 +422,20 @@ async def main(
         target_cloud_opts = AttrDict({
             'keypair': keypair_target
         })
-        target_cloud = get_impl(disk_target.cloud, resources[disk_source.cloud])
+        target_cloud = get_impl(disk_target.cloud, resources[disk_target.cloud])
         vm_target = await target_cloud.spin_up_for_disk(disk_target, read_only=False, opts=target_cloud_opts)
 
-        await sync(vm_source, vm_target)
+        with action('Now syncing the files'):
+            await sync(vm_source, vm_target)
     finally:
-
-        print('Terminating all resources')
-        for cloud, collector in resources.items():
-            for resource in collector:
+        with action('Terminating all resources'):
+            for cloud, collector in resources.items():
                 cloud_api = get_impl(cloud, resources[cloud])
-                await cloud_api.terminate_vm(resource['identifier'], region=resource.get('region'))
+                for resource in collector:                    
+                    with action('Terminating %s' % resource['identifier']):
+                        try:
+                            await cloud_api.terminate_vm(resource['identifier'], region=resource.get('region'))
+                        except Exception as e:
+                            print(e)
+
     

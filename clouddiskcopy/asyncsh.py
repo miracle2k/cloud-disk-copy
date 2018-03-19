@@ -1,7 +1,7 @@
 import asyncio
 
 
-async def sh(command, verbose=True):
+async def sh(command, verbose=True, capture=True):
     """Run command in subprocess (shell)
     
     Note:
@@ -10,9 +10,12 @@ async def sh(command, verbose=True):
     """
 
     # Create subprocess
+    kwargs = {}
+    if capture:
+        kwargs['stdout'] = asyncio.subprocess.PIPE
     process = await asyncio.create_subprocess_exec(
         *command,
-        stdout=asyncio.subprocess.PIPE)
+        **kwargs)
 
     # Status
     if verbose:
@@ -22,7 +25,10 @@ async def sh(command, verbose=True):
     stdout, stderr = await process.communicate()
 
     # Result
-    result = stdout.decode().strip()
+    if capture:
+        result = stdout.decode().strip()
+    else:
+        result = None
 
     # Progress
     if process.returncode == 0:
