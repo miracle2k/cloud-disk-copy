@@ -166,6 +166,7 @@ class GoogleCloud(Cloud):
         # Create an instance
         # Name is max 61 characters
         with action("Create a new instance."):
+            instance_resource = self.resources.prepare('instance')
             vmname = f'syncvm-for-{volume.identifier}'[:60]
             await sh([
                 'gcloud', 'compute', 'instances', 'create', 
@@ -173,6 +174,7 @@ class GoogleCloud(Cloud):
                 '--image-family', 'ubuntu-1404-lts', 
                 '--image-project', 'ubuntu-os-cloud'
             ])
+            self.resources.complete(instance_resource, identifier=vmname)
 
             # Wait until the instance is running
             # Is this necessary?
@@ -235,7 +237,7 @@ class GoogleCloud(Cloud):
                 'gcloud', 
                 'compute', 
                 'instances', 
-                'stop', 
+                'delete', 
                 vm_id
             ])
 
@@ -336,7 +338,7 @@ async def mount_disk(cloud=None, identifier=None, region=None, keypair=None, kub
     kubectl_context=None):
     """Start a VM and mount a disk.    
     """
-    disk = await get_disk_from_cli_arguments(kubernetes_pv, cloud, identifer, region, kubectl_context)
+    disk = await get_disk_from_cli_arguments(kubernetes_pv, cloud, identifier, region, kubectl_context)
 
     resources = ResourceCollector()
     cloud_opts = {
