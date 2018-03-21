@@ -91,7 +91,7 @@ class AWS(Cloud):
             '--output', 'json'
         ]))     
         instance_id = instance['Instances'][0]['InstanceId']
-        self.resources.complete(instance_resource, identifier=instance_id)
+        self.resources.complete(instance_resource, identifier=instance_id, region=opts.region)
         
         # Wait for the instance to be up.
         await sh([
