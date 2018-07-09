@@ -344,7 +344,7 @@ async def mount_disk(cloud=None, identifier=None, region=None, keypair=None, kub
     cloud_opts = {
         'keypair': keypair
     }
-    vm = await get_impl(disk.cloud, resources).spin_up_for_disk(disk, read_only=True, **cloud_opts)
+    vm = await get_impl(disk.cloud, resources).spin_up_for_disk(disk, read_only=True, opts=cloud_opts)
 
     print(vm.ident())
 
